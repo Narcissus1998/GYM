@@ -227,7 +227,10 @@ button:focus {
   box-shadow: var(--surface-shadow);
 }
 
-.panel {
+.panel,
+.schedule-panel,
+.meal-summary-panel,
+.meal-card {
   padding: 24px;
 }
 
@@ -255,6 +258,22 @@ button:focus {
   margin: 16px 0 0;
   color: var(--success);
   font-weight: 600;
+}
+
+.empty-state {
+  padding: 26px;
+  background: var(--soft-cloud);
+}
+
+.empty-state h3 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.empty-state p {
+  margin: 10px 0 0;
+  color: var(--mute);
+  line-height: 1.65;
 }
 
 .metric-stack {
@@ -366,11 +385,6 @@ button:focus {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-}
-
-.schedule-panel,
-.meal-summary-panel {
-  padding: 24px;
 }
 
 .schedule-grid {
@@ -490,10 +504,6 @@ tbody td {
   gap: 16px;
 }
 
-.meal-card {
-  padding: 22px;
-}
-
 .meal-card-head {
   display: flex;
   align-items: center;
@@ -538,6 +548,11 @@ tbody td {
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--hairline-soft);
+}
+
+.meal-empty {
+  color: var(--mute);
+  font-size: 14px;
 }
 
 .meal-breakdown-row {
@@ -626,7 +641,8 @@ tbody td {
 
   .topbar-actions,
   .hero-cta-row,
-  .macro-diff-bar {
+  .macro-diff-bar,
+  .meal-targets {
     flex-direction: column;
   }
 
@@ -650,5 +666,11 @@ tbody td {
   .headline-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .meal-card-head,
+  .template-card-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

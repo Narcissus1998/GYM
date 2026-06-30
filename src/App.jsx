@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { foodLibrary } from "./data/foods";
 import {
   bodyTypes,
+  buildAutoMealSuggestions,
   buildMealPlan,
   calculateCalories,
   calculateMacroDiff,
@@ -13,50 +14,66 @@ import {
   exportPlan,
   formatCalories,
   formatNumber,
-  mealSlots,
+  intensityOptions,
   weekdayLabels,
 } from "./lib/planner";
 
-const STORAGE_KEY = "carb-cycle-planner-state-v1";
+const STORAGE_KEY = "carb-cycle-planner-state-v2";
 
-const initialInputs = {
-  height: 165,
-  weight: 65,
-  age: 28,
+const emptyInputs = {
+  height: "",
+  weight: "",
+  age: "",
   sex: "male",
-  trainingMinutes: 80,
+  trainingMinutes: "",
   trainingFactor: 8,
   bodyType: "meso",
-  planName: "中胚训练周",
+  planName: "",
+  intensityLevel: "medium-high",
 };
 
-const initialFoodsBySlot = {
-  breakfast: [{ foodId: "oats", servings: 0.8 }, { foodId: "egg", servings: 2 }],
-  lunch: [{ foodId: "rice", servings: 2 }, { foodId: "chicken-breast", servings: 1.5 }, { foodId: "broccoli", servings: 1 }],
-  training: [{ foodId: "banana", servings: 1.5 }, { foodId: "salmon", servings: 1 }],
-  dinner: [{ foodId: "sweet-potato", servings: 2 }, { foodId: "beef", servings: 1.2 }, { foodId: "avocado", servings: 0.8 }],
-};
+function createEmptyFoodsBySlot() {
+  return {
+    breakfast: [],
+    lunch: [],
+    training: [],
+    dinner: [],
+  };
+}
+
+function normalizeNumber(value) {
+  if (value === "" || value === null || value === undefined) {
+    return 0;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function mapFoodsForSlot(foodsBySlot) {
   return Object.fromEntries(
     Object.entries(foodsBySlot).map(([slotId, foods]) => [
       slotId,
-      foods.map((item) => {
-        const food = foodLibrary.find((entry) => entry.id === item.foodId);
-        return {
-          ...food,
-          servings: item.servings,
-        };
-      }),
+      foods
+        .map((item) => {
+          const food = foodLibrary.find((entry) => entry.id === item.foodId);
+          return food
+            ? {
+                ...food,
+                servings: item.servings,
+              }
+            : null;
+        })
+        .filter(Boolean),
     ]),
   );
 }
 
 export default function App() {
-  const [inputs, setInputs] = useState(initialInputs);
+  const [inputs, setInputs] = useState(emptyInputs);
   const [schedule, setSchedule] = useState(defaultSchedule);
   const [selectedDayType, setSelectedDayType] = useState("medium");
-  const [foodsBySlot, setFoodsBySlot] = useState(initialFoodsBySlot);
+  const [foodsBySlot, setFoodsBySlot] = useState(createEmptyFoodsBySlot);
   const [saveNotice, setSaveNotice] = useState("");
 
   useEffect(() => {
@@ -68,7 +85,10 @@ export default function App() {
     try {
       const parsed = JSON.parse(saved);
       if (parsed.inputs) {
-        setInputs(parsed.inputs);
+        setInputs({
+          ...emptyInputs,
+          ...parsed.inputs,
+        });
       }
       if (Array.isArray(parsed.schedule)) {
         setSchedule(parsed.schedule);
@@ -84,19 +104,27 @@ export default function App() {
     }
   }, []);
 
-  const activeStrategy = useMemo(() => calculateStrategy(inputs, "active"), [inputs]);
-  const referenceStrategy = useMemo(() => calculateStrategy(inputs, "reference"), [inputs]);
-
-  const scheduleCounts = useMemo(() => countSchedule(schedule), [schedule]);
-  const scheduledTotals = useMemo(
-    () => calculateScheduledTotals(schedule, activeStrategy.templates),
-    [schedule, activeStrategy.templates],
+  const numericInputs = useMemo(
+    () => ({
+      ...inputs,
+      height: normalizeNumber(inputs.height),
+      weight: normalizeNumber(inputs.weight),
+      age: normalizeNumber(inputs.age),
+      trainingMinutes: normalizeNumber(inputs.trainingMinutes),
+      trainingFactor: normalizeNumber(inputs.trainingFactor),
+    }),
+    [inputs],
   );
 
+  const activeStrategy = useMemo(() => calculateStrategy(numericInputs, "active"), [numericInputs]);
+  const referenceStrategy = useMemo(() => calculateStrategy(numericInputs, "reference"), [numericInputs]);
+
+  const scheduleCounts = useMemo(() => countSchedule(schedule), [schedule]);
   const selectedTemplate = activeStrategy.templates[selectedDayType];
+  const mappedFoodsBySlot = useMemo(() => mapFoodsForSlot(foodsBySlot), [foodsBySlot]);
   const mealPlan = useMemo(
-    () => buildMealPlan(selectedTemplate, mapFoodsForSlot(foodsBySlot)),
-    [selectedTemplate, foodsBySlot],
+    () => buildMealPlan(selectedTemplate, mappedFoodsBySlot),
+    [selectedTemplate, mappedFoodsBySlot],
   );
 
   const actualMealTotals = useMemo(
@@ -114,12 +142,24 @@ export default function App() {
     [mealPlan],
   );
 
-  const mealDiff = useMemo(() => calculateMacroDiff(selectedTemplate, actualMealTotals), [selectedTemplate, actualMealTotals]);
+  const mealDiff = useMemo(
+    () => calculateMacroDiff(selectedTemplate, actualMealTotals),
+    [selectedTemplate, actualMealTotals],
+  );
 
   function updateInput(key, value) {
     setInputs((current) => ({
       ...current,
       [key]: value,
+    }));
+  }
+
+  function updateIntensity(levelId) {
+    const option = intensityOptions.find((item) => item.id === levelId);
+    setInputs((current) => ({
+      ...current,
+      intensityLevel: levelId,
+      trainingFactor: option?.factor ?? current.trainingFactor,
     }));
   }
 
@@ -156,20 +196,28 @@ export default function App() {
   }
 
   function savePlan() {
-    const payload = {
-      inputs,
-      schedule,
-      foodsBySlot,
-      selectedDayType,
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        inputs,
+        schedule,
+        foodsBySlot,
+        selectedDayType,
+      }),
+    );
     setSaveNotice("计划已保存到本地浏览器。");
+    window.setTimeout(() => setSaveNotice(""), 2200);
+  }
+
+  function autoRecommendFoods() {
+    setFoodsBySlot(buildAutoMealSuggestions(selectedTemplate));
+    setSaveNotice("已按当前日模板自动推荐食材组合。");
     window.setTimeout(() => setSaveNotice(""), 2200);
   }
 
   function handleExport() {
     exportPlan({
-      inputs,
+      inputs: numericInputs,
       schedule,
       strategy: activeStrategy,
       mealPlan,
@@ -178,6 +226,11 @@ export default function App() {
   }
 
   const scheduleBalanced = scheduleCounts.high === 2 && scheduleCounts.medium === 3 && scheduleCounts.low === 2;
+  const hasCoreInputs =
+    numericInputs.height > 0 &&
+    numericInputs.weight > 0 &&
+    numericInputs.age > 0 &&
+    numericInputs.trainingMinutes > 0;
 
   return (
     <div className="app-shell">
@@ -188,7 +241,7 @@ export default function App() {
             保存计划
           </button>
           <button className="primary-pill" type="button" onClick={handleExport}>
-            导出周计划
+            导出 PDF
           </button>
         </div>
       </header>
@@ -232,19 +285,38 @@ export default function App() {
             <div className="field-grid">
               <label className="field">
                 <span>计划名</span>
-                <input value={inputs.planName} onChange={(event) => updateInput("planName", event.target.value)} />
+                <input
+                  value={inputs.planName}
+                  placeholder="例如：减脂训练周"
+                  onChange={(event) => updateInput("planName", event.target.value)}
+                />
               </label>
               <label className="field">
                 <span>身高 cm</span>
-                <input type="number" value={inputs.height} onChange={(event) => updateInput("height", Number(event.target.value))} />
+                <input
+                  type="number"
+                  value={inputs.height}
+                  placeholder="请输入"
+                  onChange={(event) => updateInput("height", event.target.value)}
+                />
               </label>
               <label className="field">
                 <span>体重 kg</span>
-                <input type="number" value={inputs.weight} onChange={(event) => updateInput("weight", Number(event.target.value))} />
+                <input
+                  type="number"
+                  value={inputs.weight}
+                  placeholder="请输入"
+                  onChange={(event) => updateInput("weight", event.target.value)}
+                />
               </label>
               <label className="field">
                 <span>年龄</span>
-                <input type="number" value={inputs.age} onChange={(event) => updateInput("age", Number(event.target.value))} />
+                <input
+                  type="number"
+                  value={inputs.age}
+                  placeholder="请输入"
+                  onChange={(event) => updateInput("age", event.target.value)}
+                />
               </label>
               <label className="field">
                 <span>性别</span>
@@ -254,21 +326,23 @@ export default function App() {
                 </select>
               </label>
               <label className="field">
-                <span>训练时间 分钟</span>
+                <span>每天训练时长-分钟</span>
                 <input
                   type="number"
                   value={inputs.trainingMinutes}
-                  onChange={(event) => updateInput("trainingMinutes", Number(event.target.value))}
+                  placeholder="请输入"
+                  onChange={(event) => updateInput("trainingMinutes", event.target.value)}
                 />
               </label>
               <label className="field">
-                <span>训练系数</span>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={inputs.trainingFactor}
-                  onChange={(event) => updateInput("trainingFactor", Number(event.target.value))}
-                />
+                <span>运动强度</span>
+                <select value={inputs.intensityLevel} onChange={(event) => updateIntensity(event.target.value)}>
+                  {intensityOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field field-full">
                 <span>体质类型</span>
@@ -284,203 +358,211 @@ export default function App() {
           </article>
 
           <article className="panel panel-metrics">
-            <div className="metric-stack">
-              <div className="metric">
-                <span>基础代谢</span>
-                <strong>{formatCalories(activeStrategy.bmr)}</strong>
+            {!hasCoreInputs ? (
+              <div className="empty-state">
+                <h3>先填基础数据</h3>
+                <p>第一次进入页面时不预填身体参数。输入身高、体重、年龄和每天训练时长后，这里会生成消耗与日目标。</p>
               </div>
-              <div className="metric">
-                <span>训练消耗</span>
-                <strong>{formatCalories(activeStrategy.trainingBurn)}</strong>
-              </div>
-              <div className="metric">
-                <span>每日消耗</span>
-                <strong>{formatCalories(activeStrategy.dailyExpenditure)}</strong>
-              </div>
-            </div>
-
-            <div className="conflict-card">
-              <div className="conflict-head">
-                <h3>规则差异</h3>
-                <span>当前结果与参考表并排展示</span>
-              </div>
-              <div className="comparison-pair">
-                <ComparisonBlock
-                  title="当前规则"
-                  coefficients={activeStrategy.coefficients}
-                  targets={activeStrategy.dailyTargets}
-                />
-                <ComparisonBlock
-                  title="参考表"
-                  coefficients={referenceStrategy.coefficients}
-                  targets={referenceStrategy.dailyTargets}
-                />
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section className="headline-row">
-          <div>
-            <p className="section-kicker">Weekly Rotation</p>
-            <h2>周碳循环节奏</h2>
-          </div>
-          <div className="headline-meta">
-            <span>高 {scheduleCounts.high}</span>
-            <span>中 {scheduleCounts.medium}</span>
-            <span>低 {scheduleCounts.low}</span>
-          </div>
-        </section>
-
-        <section className="rotation-layout">
-          <article className="template-band">
-            {Object.entries(activeStrategy.templates).map(([key, template]) => (
-              <div className="template-card" key={key}>
-                <div className="template-card-head">
-                  <h3>{dayTypes[key].label}</h3>
-                  <button
-                    type="button"
-                    className={`chip-button ${selectedDayType === key ? "chip-active" : ""}`}
-                    onClick={() => setSelectedDayType(key)}
-                  >
-                    用于餐次分配
-                  </button>
-                </div>
-                <dl>
-                  <div>
-                    <dt>碳水</dt>
-                    <dd>{formatNumber(template.carbs)} g</dd>
+            ) : (
+              <>
+                <div className="metric-stack">
+                  <div className="metric">
+                    <span>基础代谢</span>
+                    <strong>{formatCalories(activeStrategy.bmr)}</strong>
                   </div>
-                  <div>
-                    <dt>蛋白质</dt>
-                    <dd>{formatNumber(template.protein)} g</dd>
+                  <div className="metric">
+                    <span>训练消耗</span>
+                    <strong>{formatCalories(activeStrategy.trainingBurn)}</strong>
                   </div>
-                  <div>
-                    <dt>脂肪</dt>
-                    <dd>{formatNumber(template.fat)} g</dd>
+                  <div className="metric">
+                    <span>每日消耗</span>
+                    <strong>{formatCalories(activeStrategy.dailyExpenditure)}</strong>
                   </div>
-                  <div>
-                    <dt>摄入热量</dt>
-                    <dd>{formatCalories(calculateCalories(template))}</dd>
-                  </div>
-                </dl>
-              </div>
-            ))}
-          </article>
-
-          <article className="schedule-panel">
-            <div className="schedule-grid">
-              {weekdayLabels.map((day, index) => (
-                <label className="schedule-field" key={day}>
-                  <span>{day}</span>
-                  <select value={schedule[index]} onChange={(event) => updateSchedule(index, event.target.value)}>
-                    <option value="medium">中碳</option>
-                    <option value="high">高碳</option>
-                    <option value="low">低碳</option>
-                  </select>
-                </label>
-              ))}
-            </div>
-
-            <div className={`schedule-status ${scheduleBalanced ? "status-ok" : "status-warn"}`}>
-              {scheduleBalanced
-                ? "当前排期与 2-3-2 节奏一致，一周总量能完整回到目标。"
-                : "当前排期偏离 2-3-2 节奏，一周总量会出现偏差。"}
-            </div>
-
-            <ScheduleTable
-              schedule={schedule}
-              templates={activeStrategy.templates}
-              weeklyTargets={activeStrategy.weeklyTargets}
-              dailyExpenditure={activeStrategy.dailyExpenditure}
-            />
-          </article>
-        </section>
-
-        <section className="headline-row" id="meals">
-          <div>
-            <p className="section-kicker">Food Conversion</p>
-            <h2>食物换算与餐次分配</h2>
-          </div>
-          <div className="headline-meta">
-            <span>{dayTypes[selectedDayType].label}模板</span>
-            <span>{formatCalories(calculateCalories(selectedTemplate))}</span>
-          </div>
-        </section>
-
-        <section className="meal-layout">
-          <article className="meal-summary-panel">
-            <div className="meal-summary-top">
-              <h3>当日模板总目标</h3>
-              <p>把模板拆给早餐、午餐、训练前后和晚餐，再用食物库去逼近目标。</p>
-            </div>
-            <div className="meal-total-grid">
-              <SummaryMetric label="目标碳水" value={`${formatNumber(selectedTemplate.carbs)} g`} />
-              <SummaryMetric label="目标蛋白质" value={`${formatNumber(selectedTemplate.protein)} g`} />
-              <SummaryMetric label="目标脂肪" value={`${formatNumber(selectedTemplate.fat)} g`} />
-              <SummaryMetric label="目标热量" value={formatCalories(calculateCalories(selectedTemplate))} />
-              <SummaryMetric label="实际碳水" value={`${formatNumber(actualMealTotals.carbs)} g`} />
-              <SummaryMetric label="实际蛋白质" value={`${formatNumber(actualMealTotals.protein)} g`} />
-              <SummaryMetric label="实际脂肪" value={`${formatNumber(actualMealTotals.fat)} g`} />
-              <SummaryMetric label="实际热量" value={formatCalories(actualMealTotals.calories)} />
-            </div>
-            <div className="macro-diff-bar">
-              <span>碳水差值 {formatNumber(mealDiff.carbs)} g</span>
-              <span>蛋白差值 {formatNumber(mealDiff.protein)} g</span>
-              <span>脂肪差值 {formatNumber(mealDiff.fat)} g</span>
-            </div>
-          </article>
-
-          <article className="meal-cards">
-            {mealPlan.map((slot) => (
-              <div className="meal-card" key={slot.id}>
-                <div className="meal-card-head">
-                  <div>
-                    <p>{slot.label}</p>
-                    <h3>{Math.round(slot.ratio * 100)}% 配额</h3>
-                  </div>
-                  <button className="secondary-pill secondary-small" type="button" onClick={() => addFood(slot.id)}>
-                    添加食物
-                  </button>
                 </div>
 
-                <div className="meal-targets">
-                  <span>目标 {formatNumber(slot.target.carbs)}C / {formatNumber(slot.target.protein)}P / {formatNumber(slot.target.fat)}F</span>
-                  <span>实际 {formatNumber(slot.actual.carbs)}C / {formatNumber(slot.actual.protein)}P / {formatNumber(slot.actual.fat)}F</span>
+                <div className="conflict-card">
+                  <div className="conflict-head">
+                    <h3>规则差异</h3>
+                    <span>当前结果与参考表并排展示</span>
+                  </div>
+                  <div className="comparison-pair">
+                    <ComparisonBlock title="当前规则" coefficients={activeStrategy.coefficients} targets={activeStrategy.dailyTargets} />
+                    <ComparisonBlock title="参考表" coefficients={referenceStrategy.coefficients} targets={referenceStrategy.dailyTargets} />
+                  </div>
                 </div>
+              </>
+            )}
+          </article>
+        </section>
 
-                <div className="food-list">
-                  {foodsBySlot[slot.id].map((foodItem, index) => (
-                    <div className="food-row" key={`${slot.id}-${index}`}>
-                      <select
-                        value={foodItem.foodId}
-                        onChange={(event) => updateFood(slot.id, index, "foodId", event.target.value)}
+        {hasCoreInputs ? (
+          <>
+            <section className="headline-row">
+              <div>
+                <p className="section-kicker">Weekly Rotation</p>
+                <h2>周碳循环节奏</h2>
+              </div>
+              <div className="headline-meta">
+                <span>高 {scheduleCounts.high}</span>
+                <span>中 {scheduleCounts.medium}</span>
+                <span>低 {scheduleCounts.low}</span>
+              </div>
+            </section>
+
+            <section className="rotation-layout">
+              <article className="template-band">
+                {Object.entries(activeStrategy.templates).map(([key, template]) => (
+                  <div className="template-card" key={key}>
+                    <div className="template-card-head">
+                      <h3>{dayTypes[key].label}</h3>
+                      <button
+                        type="button"
+                        className={`chip-button ${selectedDayType === key ? "chip-active" : ""}`}
+                        onClick={() => setSelectedDayType(key)}
                       >
-                        {foodLibrary.map((food) => (
-                          <option key={food.id} value={food.id}>
-                            {food.name} / {food.unit}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.1"
-                        value={foodItem.servings}
-                        onChange={(event) => updateFood(slot.id, index, "servings", event.target.value)}
-                      />
-                      <button className="icon-button" type="button" onClick={() => removeFood(slot.id, index)}>
-                        删除
+                        用于餐次分配
                       </button>
                     </div>
+                    <dl>
+                      <div>
+                        <dt>碳水</dt>
+                        <dd>{formatNumber(template.carbs)} g</dd>
+                      </div>
+                      <div>
+                        <dt>蛋白质</dt>
+                        <dd>{formatNumber(template.protein)} g</dd>
+                      </div>
+                      <div>
+                        <dt>脂肪</dt>
+                        <dd>{formatNumber(template.fat)} g</dd>
+                      </div>
+                      <div>
+                        <dt>摄入热量</dt>
+                        <dd>{formatCalories(calculateCalories(template))}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                ))}
+              </article>
+
+              <article className="schedule-panel">
+                <div className="schedule-grid">
+                  {weekdayLabels.map((day, index) => (
+                    <label className="schedule-field" key={day}>
+                      <span>{day}</span>
+                      <select value={schedule[index]} onChange={(event) => updateSchedule(index, event.target.value)}>
+                        <option value="medium">中碳</option>
+                        <option value="high">高碳</option>
+                        <option value="low">低碳</option>
+                      </select>
+                    </label>
                   ))}
                 </div>
 
-                <MealSlotBreakdown slot={slot} />
+                <div className={`schedule-status ${scheduleBalanced ? "status-ok" : "status-warn"}`}>
+                  {scheduleBalanced
+                    ? "当前排期与 2-3-2 节奏一致，一周总量能完整回到目标。"
+                    : "当前排期偏离 2-3-2 节奏，一周总量会出现偏差。"}
+                </div>
+
+                <ScheduleTable
+                  schedule={schedule}
+                  templates={activeStrategy.templates}
+                  weeklyTargets={activeStrategy.weeklyTargets}
+                  dailyExpenditure={activeStrategy.dailyExpenditure}
+                />
+              </article>
+            </section>
+
+            <section className="headline-row" id="meals">
+              <div>
+                <p className="section-kicker">Food Conversion</p>
+                <h2>食物换算与餐次分配</h2>
               </div>
-            ))}
-          </article>
-        </section>
+              <div className="headline-meta">
+                <span>{dayTypes[selectedDayType].label}模板</span>
+                <span>{formatCalories(calculateCalories(selectedTemplate))}</span>
+                <button className="chip-button" type="button" onClick={autoRecommendFoods}>
+                  按目标自动推荐食材组合
+                </button>
+              </div>
+            </section>
+
+            <section className="meal-layout">
+              <article className="meal-summary-panel">
+                <div className="meal-summary-top">
+                  <h3>当日模板总目标</h3>
+                  <p>把模板拆给早餐、午餐、训练前后和晚餐，再用中国健身饮食库去逼近目标。</p>
+                </div>
+                <div className="meal-total-grid">
+                  <SummaryMetric label="目标碳水" value={`${formatNumber(selectedTemplate.carbs)} g`} />
+                  <SummaryMetric label="目标蛋白质" value={`${formatNumber(selectedTemplate.protein)} g`} />
+                  <SummaryMetric label="目标脂肪" value={`${formatNumber(selectedTemplate.fat)} g`} />
+                  <SummaryMetric label="目标热量" value={formatCalories(calculateCalories(selectedTemplate))} />
+                  <SummaryMetric label="实际碳水" value={`${formatNumber(actualMealTotals.carbs)} g`} />
+                  <SummaryMetric label="实际蛋白质" value={`${formatNumber(actualMealTotals.protein)} g`} />
+                  <SummaryMetric label="实际脂肪" value={`${formatNumber(actualMealTotals.fat)} g`} />
+                  <SummaryMetric label="实际热量" value={formatCalories(actualMealTotals.calories)} />
+                </div>
+                <div className="macro-diff-bar">
+                  <span>碳水差值 {formatNumber(mealDiff.carbs)} g</span>
+                  <span>蛋白差值 {formatNumber(mealDiff.protein)} g</span>
+                  <span>脂肪差值 {formatNumber(mealDiff.fat)} g</span>
+                </div>
+              </article>
+
+              <article className="meal-cards">
+                {mealPlan.map((slot) => (
+                  <div className="meal-card" key={slot.id}>
+                    <div className="meal-card-head">
+                      <div>
+                        <p>{slot.label}</p>
+                        <h3>{Math.round(slot.ratio * 100)}% 配额</h3>
+                      </div>
+                      <button className="secondary-pill secondary-small" type="button" onClick={() => addFood(slot.id)}>
+                        添加食物
+                      </button>
+                    </div>
+
+                    <div className="meal-targets">
+                      <span>目标 {formatNumber(slot.target.carbs)}C / {formatNumber(slot.target.protein)}P / {formatNumber(slot.target.fat)}F</span>
+                      <span>实际 {formatNumber(slot.actual.carbs)}C / {formatNumber(slot.actual.protein)}P / {formatNumber(slot.actual.fat)}F</span>
+                    </div>
+
+                    <div className="food-list">
+                      {foodsBySlot[slot.id].map((foodItem, index) => (
+                        <div className="food-row" key={`${slot.id}-${index}`}>
+                          <select
+                            value={foodItem.foodId}
+                            onChange={(event) => updateFood(slot.id, index, "foodId", event.target.value)}
+                          >
+                            {foodLibrary.map((food) => (
+                              <option key={food.id} value={food.id}>
+                                {food.name} / {food.unit}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={foodItem.servings}
+                            onChange={(event) => updateFood(slot.id, index, "servings", event.target.value)}
+                          />
+                          <button className="icon-button" type="button" onClick={() => removeFood(slot.id, index)}>
+                            删除
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <MealSlotBreakdown slot={slot} />
+                  </div>
+                ))}
+              </article>
+            </section>
+          </>
+        ) : null}
       </main>
     </div>
   );
@@ -577,6 +659,7 @@ function SummaryMetric({ label, value }) {
 function MealSlotBreakdown({ slot }) {
   return (
     <div className="meal-breakdown">
+      {slot.foods.length === 0 ? <div className="meal-empty">当前餐次还没有选择食物。</div> : null}
       {slot.foods.map((food) => (
         <div className="meal-breakdown-row" key={`${slot.id}-${food.id}`}>
           <span>{food.name} × {food.servings}</span>
